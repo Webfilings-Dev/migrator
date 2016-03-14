@@ -35,6 +35,10 @@ initialize_migrator() {
   V1_NO_LOGIN=${V1_NO_LOGIN:-false}
   V2_NO_LOGIN=${V2_NO_LOGIN:-false}
 
+  # set default to push images after pulling
+  V2_MIGRATE_ENABLE_PUSH=${V2_MIGRATE_ENABLE_PUSH:-true}
+  V1_REPO_LIST=${V1_REPO_LIST:-/usr/local/bin/repos.txt}
+
   # if NO_LOGIN is true, set both v1 and v2 values to true
   if [ "${NO_LOGIN}" = "true" ]
   then
@@ -366,21 +370,27 @@ query_source_images() {
       done
     done
   else
-    # check to see if a filter pattern was provided
-    if [ -z "${V1_REPO_FILTER}" ]
+    if [ -n "${V1_REPO_LIST}" ]
     then
-      # no filter pattern was defined, get all repos
-      REPO_LIST=$(curl ${V1_OPTIONS} -sf ${V1_PROTO}://${AUTH_CREDS}@${V1_REGISTRY}/v1/search?q= | jq -r '.results | .[] | .name') || catch_error "curl => API failure"
-    else
-      # filter pattern defined, use grep to match repos w/regex capabilites
-      REPO_LIST=$(curl ${V1_OPTIONS} -sf ${V1_PROTO}://${AUTH_CREDS}@${V1_REGISTRY}/v1/search?q= | jq -r '.results | .[] | .name' | grep ${V1_REPO_FILTER} || true) || catch_error "curl => API failure"
+      REPO_LIST=$(cat "${V1_REPO_LIST}")
     fi
 
+    echo -e "\n${INFO} ${V1_OPTIONS} ${V1_PROTO} ${AUTH_CREDS} ${V1_REGISTRY}"
+    echo -e "\n${INFO} REPO_LIST retrieved from ${V1_REPO_LIST}"
     # loop through all repos in v1 registry to get tags for each
     for i in ${REPO_LIST}
     do
       # get list of tags for image i
-      IMAGE_TAGS=$(curl ${V1_OPTIONS} -sf ${V1_PROTO}://${AUTH_CREDS}@${V1_REGISTRY}/v1/repositories/${i}/tags | jq -r 'keys | .[]') || catch_error "curl => API failure"
+      echo -e "\n${INFO} IMAGE_TAGS try for ${i}"
+      n=0
+      until [ $n -ge 5 ]
+      do
+        IMAGE_TAGS=$(curl ${V1_OPTIONS} -sf ${V1_PROTO}://${AUTH_CREDS}@${V1_REGISTRY}/v1/repositories/${i}/tags | jq -r 'keys | .[]') || echo "curl => API failure" && break
+        n=$[$n+1]
+        sleep 15
+      done
+
+      echo -e "\n${INFO} IMAGE_TAGS retrieved for ${i}"
 
       # loop through tags to create list of full image names w/tags
       for j in ${IMAGE_TAGS}
@@ -391,6 +401,8 @@ query_source_images() {
           # cut off 'library/' from beginning of image
           i="${i:8}"
         fi
+
+        echo -e "\n${INFO} ADDING IMAGE_TAG ${j} for ${i}"
 
         # add image to list
         FULL_IMAGE_LIST="${FULL_IMAGE_LIST} ${i}:${j}"
@@ -565,15 +577,17 @@ main() {
   query_source_images
   show_source_image_list
   pull_images_from_source
-  check_registry_swap_or_retag
-  verify_v2_ready
-  # check to see if V2_NO_LOGIN is true
-  if [ "${V2_NO_LOGIN}" != "true" ]; then
-    docker_login ${V2_REGISTRY} ${V2_USERNAME} ${V2_PASSWORD} ${V2_EMAIL}
+  if [ "${V2_MIGRATE_ENABLE_PUSH}" != "true" ]; then
+    check_registry_swap_or_retag
+    verify_v2_ready
+    # check to see if V2_NO_LOGIN is true
+    if [ "${V2_NO_LOGIN}" != "true" ]; then
+      docker_login ${V2_REGISTRY} ${V2_USERNAME} ${V2_PASSWORD} ${V2_EMAIL}
+    fi
+    push_images_to_v2
+    cleanup_local_engine
+    migration_complete
   fi
-  push_images_to_v2
-  cleanup_local_engine
-  migration_complete
 }
 
 main "$@"
