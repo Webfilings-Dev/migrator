@@ -36,7 +36,6 @@ initialize_migrator() {
   V2_NO_LOGIN=${V2_NO_LOGIN:-false}
 
   # set default to push images after pulling
-  V2_MIGRATE_ENABLE_PUSH=${V2_MIGRATE_ENABLE_PUSH:-true}
   V1_REPO_LIST=${V1_REPO_LIST:-/usr/local/bin/repos.txt}
 
   # if NO_LOGIN is true, set both v1 and v2 values to true
@@ -370,9 +369,10 @@ query_source_images() {
       done
     done
   else
-    if [ -n "${V1_REPO_LIST}" ]
+    if [ -n "${V1_REPO_LIST}" ];
     then
-      REPO_LIST=$(cat "${V1_REPO_LIST}")
+      V1_DATA=${V1_REPO_LIST}
+      REPO_LIST=$(cat ${V1_DATA} | jq -r '.[] | .name')
     fi
 
     echo -e "\n${INFO} ${V1_OPTIONS} ${V1_PROTO} ${AUTH_CREDS} ${V1_REGISTRY}"
@@ -381,14 +381,14 @@ query_source_images() {
     for i in ${REPO_LIST}
     do
       # get list of tags for image i
-      echo -e "\n${INFO} IMAGE_TAGS try for ${i}"
-      n=0
-      until [ $n -ge 5 ]
-      do
-        IMAGE_TAGS=$(curl ${V1_OPTIONS} -sf ${V1_PROTO}://${AUTH_CREDS}@${V1_REGISTRY}/v1/repositories/${i}/tags | jq -r 'keys | .[]') || echo "curl => API failure" && break
-        n=$[$n+1]
-        sleep 15
-      done
+      # n=0
+      # until [ $n -ge 5 ]
+      # do
+        # IMAGE_TAGS=$(curl ${V1_OPTIONS} -sf ${V1_PROTO}://${AUTH_CREDS}@${V1_REGISTRY}/v1/repositories/${i}/tags | jq -r 'keys | .[]') || echo "curl => API failure" && break
+        # n=$[$n+1]
+        # sleep 15
+      # done
+      IMAGE_TAGS=$(cat ${V1_DATA} | jq --arg i ${i} '.[] | select(.name | contains($i)).tags | .[]')
 
       echo -e "\n${INFO} IMAGE_TAGS retrieved for ${i}"
 
@@ -402,13 +402,14 @@ query_source_images() {
           i="${i:8}"
         fi
 
-        echo -e "\n${INFO} ADDING IMAGE_TAG ${j} for ${i}"
+        echo -e "\n${INFO} ADDING IMAGE_TAG ${i}:${j}"
 
         # add image to list
         FULL_IMAGE_LIST="${FULL_IMAGE_LIST} ${i}:${j}"
       done
     done
   fi
+  echo -e "${OK} ${FULL_IMAGE_LIST}"
   echo -e "${OK} Successfully retrieved list of Docker images from ${V1_REGISTRY}"
 }
 
@@ -568,7 +569,7 @@ migration_complete() {
 # main function
 main() {
   initialize_migrator
-  verify_ready
+  #verify_ready
   # check to see if NO_LOGIN is not true
   if [ "${V1_NO_LOGIN}" != "true" ]; then
     docker_login ${V1_REGISTRY} ${V1_USERNAME} ${V1_PASSWORD} ${V1_EMAIL}
@@ -576,18 +577,17 @@ main() {
   fi
   query_source_images
   show_source_image_list
-  pull_images_from_source
-  if [ "${V2_MIGRATE_ENABLE_PUSH}" != "true" ]; then
-    check_registry_swap_or_retag
-    verify_v2_ready
-    # check to see if V2_NO_LOGIN is true
-    if [ "${V2_NO_LOGIN}" != "true" ]; then
-      docker_login ${V2_REGISTRY} ${V2_USERNAME} ${V2_PASSWORD} ${V2_EMAIL}
-    fi
-    push_images_to_v2
-    cleanup_local_engine
-    migration_complete
+  #pull_images_from_source
+  check_registry_swap_or_retag
+  #verify_v2_ready
+  # check to see if V2_NO_LOGIN is true
+  if [ "${V2_NO_LOGIN}" != "true" ]; then
+    docker_login ${V2_REGISTRY} ${V2_USERNAME} ${V2_PASSWORD} ${V2_EMAIL}
   fi
+  push_images_to_v2
+  echo -e "\n${ERROR} Skipping local docker engine cleanup"
+  #cleanup_local_engine
+  migration_complete
 }
 
 main "$@"
